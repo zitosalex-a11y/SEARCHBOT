@@ -38,7 +38,7 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(searchbot.extract_amount(text), 1900)
 
     def test_hebrew_report(self):
-        text = "דוח סגירה\nלקוח: דני כהן\nטלפון: 050-1234567\nסה\"כ: 1500 ש\"ח"
+        text = "לקוח: דני כהן\nטלפון: 050-1234567\nנסגר\nסה\"כ: 1500 ש\"ח"
         [sale] = searchbot.find_sales(searchbot.parse_messages("1.3.24, 10:00 - רון: " + text), 1000)
         self.assertEqual(sale.customer, "דני כהן")
         self.assertEqual(sale.phone, "050-1234567")
@@ -74,13 +74,25 @@ class ClosingReportTests(unittest.TestCase):
         self.assertEqual(sale.parts, 370)  # CP + company parts
         self.assertEqual(sale.parts_detail, "CP parts: 150$ | Company parts: 220$")
 
+    def test_callbacks_and_in_progress_are_skipped(self):
+        callback = self.REPORT.replace("Closed\n", "Callback\n")
+        in_progress = self.REPORT.replace("Closed\n", "In progress\n")
+        no_total = self.REPORT.replace("Total: 1,800$\n", "")
+        for text in (callback, in_progress, no_total):
+            with self.subTest(text=text.splitlines()[7:9]):
+                self.assertEqual(searchbot.find_sales(searchbot.parse_messages(text), 1000), [])
+
+    def test_closed_with_extra_text(self):
+        text = self.REPORT.replace("Closed\n", "CLOSED ✅ paid cash\n")
+        self.assertEqual(len(searchbot.find_sales(searchbot.parse_messages(text), 1000)), 1)
+
     def test_total_without_currency_sign(self):
         text = "Customer: A\nClosed\nTotal: 2500\nParts: 300"
         self.assertEqual(searchbot.extract_amount(text), 2500)
         self.assertEqual(searchbot.extract_parts(text)[0], 300)
 
     def test_exactly_1000_is_not_over(self):
-        msgs = searchbot.parse_messages("3/5/24, 9:00 AM - Sam: Customer: A\nTotal: 1000$")
+        msgs = searchbot.parse_messages("3/5/24, 9:00 AM - Sam: Customer: A\nClosed\nTotal: 1000$")
         self.assertEqual(searchbot.find_sales(msgs, 1000), [])
 
 
@@ -94,7 +106,7 @@ class EndToEndTests(unittest.TestCase):
             with open(f"{out}_sales.csv", encoding="utf-8-sig") as f:
                 sales = list(csv.DictReader(f))
 
-        # $350 job, exactly-$1000 job and the "1000 main st" chat are excluded
+        # $350 job, exactly-$1000 job, callback, in-progress job and chat messages are excluded
         self.assertEqual(len(sales), 3)
         self.assertEqual([c["customer"] for c in customers], ["John Smith", "Robert Lee"])
         john = customers[0]

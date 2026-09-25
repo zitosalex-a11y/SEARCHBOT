@@ -54,3 +54,23 @@ Notes:
 Closed
 Total: 1000$
 Parts: 400$
+3/6/24, 1:30 PM - Mike (Tech): Customer: Kevin Brown
+Phone: 555-777-8888
+Address: 21 Cedar Ln, Allen TX
+Service: Furnace not igniting
+Preferred Date And Time: 3/6 1pm
+Notes: need to order control board
+
+Callback
+Total: 2,400$
+Parts: 600$
+3/6/24, 4:10 PM - Sam: Customer: Amy Chen
+Phone: 555-333-9090
+Address: 5 Birch Ct, McKinney TX
+Service: Full duct replacement
+Preferred Date And Time: 3/6 9am
+Notes: day 1 of 2
+
+In progress
+Total: 7,500$
+Deposit: 2,000$

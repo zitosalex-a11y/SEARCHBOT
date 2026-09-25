@@ -260,12 +260,35 @@ class Customer:
     dates: list[str] = field(default_factory=list)
 
 
+# A line saying the job is closed: "Closed", "CLOSED ✅", "Closed - paid cash", "נסגר".
+_CLOSED_LINE = re.compile(r"^[\W_]*(?:job\s+)?(?:closed|נסגר|סגור)\b", re.IGNORECASE)
+
+
+def is_customer_report(text: str) -> bool:
+    """A job report of any status (starts the team template with a Customer: line)."""
+    return any(_CUSTOMER_RE.match(line.strip()) for line in text.splitlines())
+
+
+def is_closed_report(text: str) -> bool:
+    """A finished job in the team template: Customer: line + "Closed" line + Total: line.
+
+    Callbacks and in-progress jobs don't have the "Closed" line, so they are skipped.
+    """
+    return (
+        is_customer_report(text)
+        and any(_CLOSED_LINE.match(line.strip()) for line in text.splitlines())
+        and _labelled_amount(text, _JOB_TOTAL_RE) is not None
+    )
+
+
 def find_sales(messages: list[Message], minimum: float, keyword: str | None = None) -> list[Sale]:
     sales = []
     for msg in messages:
         if keyword and keyword.lower() not in msg.text.lower():
             continue
-        amount = extract_amount(msg.text)
+        if not is_closed_report(msg.text):
+            continue
+        amount = _labelled_amount(msg.text, _JOB_TOTAL_RE)
         if amount is None or amount <= minimum:
             continue
         parts, parts_detail = extract_parts(msg.text)
@@ -384,6 +407,8 @@ def main(argv: list[str] | None = None) -> int:
     wrote_xlsx = write_xlsx(out.with_name(out.name + ".xlsx"), sales, customers)
 
     print(f"Scanned {len(messages)} messages.")
+    open_jobs = sum(1 for m in messages if is_customer_report(m.text) and not is_closed_report(m.text))
+    print(f"Skipped {open_jobs} reports without a Closed + Total: line (callbacks, in progress, ...).")
     print(f"Found {len(sales)} sales above ${args.min:,.0f} from {len(customers)} customers.")
     for c in customers[:10]:
         print(f"  {c.customer:<30} {c.phone:<18} ${c.total_spent:>10,.2f}  ({c.jobs} job{'s' if c.jobs != 1 else ''})")

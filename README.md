@@ -52,6 +52,10 @@ Total: 1,800$
 Parts: 150$          (or "CP parts: 150$" / "Company parts: 220$", can be on several lines)
 ```
 
+**Only finished jobs are counted.** A message is included only if it has all three of these:
+a `Customer:` line, a line that starts with `Closed` (for example `Closed`, `CLOSED ✅` or `Closed - paid cash`), and a `Total:` line.
+Callbacks, in-progress jobs and ordinary chat messages are skipped. The bot prints how many reports it skipped.
+
 The job total is always read from the `Total:` line. A report is included only if its total is **over** the limit, so a total of exactly $1000 is left out.
 Parts cost is the sum of all parts lines. The original lines are kept in the `parts_detail` column, so you can still see which parts were CP and which were company parts.
 
