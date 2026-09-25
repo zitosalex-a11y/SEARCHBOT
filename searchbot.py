@@ -2,7 +2,7 @@
 """SearchBot - pull big sales out of a WhatsApp group chat export.
 
 Reads the file WhatsApp produces with "Export chat" (a .txt, or the .zip it
-sometimes comes in), finds every closing report whose sale amount is above a
+sometimes comes in), finds every closed garage door job whose total is above a
 threshold (default $1000), and writes:
 
   * <out>_sales.csv      - one row per qualifying job
@@ -12,6 +12,7 @@ threshold (default $1000), and writes:
 Usage:
   python searchbot.py "WhatsApp Chat with Closing Reports.txt"
   python searchbot.py chat.zip --min 1500 --out big_customers
+  python searchbot.py chat.zip --service all      # garage door AND hvac jobs
 """
 
 from __future__ import annotations
@@ -281,12 +282,47 @@ def is_closed_report(text: str) -> bool:
     )
 
 
-def find_sales(messages: list[Message], minimum: float, keyword: str | None = None) -> list[Sale]:
+# Words in the "Service:" line that tell which kind of job it is.
+SERVICE_TYPES = {
+    "garage": [
+        "garage", "door", "doors", "spring", "springs", "torsion", "opener", "openers",
+        "cable", "cables", "roller", "rollers", "track", "tracks", "panel", "panels", "gdo",
+        "מוסך", "דלת", "קפיץ", "מנוע",
+    ],
+    "hvac": [
+        "hvac", "ac", "a/c", "a\\c", "air condition", "air conditioner", "air conditioning",
+        "furnace", "heat", "heating", "heater", "heat pump", "duct", "ducts", "cooling",
+        "thermostat", "compressor", "condenser", "mini split", "minisplit", "coil", "freon",
+        "מזגן", "מיזוג", "חימום",
+    ],
+}
+
+
+def _word_regex(words: list[str]) -> re.Pattern:
+    alternatives = "|".join(sorted((re.escape(w) for w in words), key=len, reverse=True))
+    return re.compile(rf"(?<!\w)(?:{alternatives})(?!\w)", re.IGNORECASE)
+
+
+_SERVICE_TYPE_RES = {name: _word_regex(words) for name, words in SERVICE_TYPES.items()}
+
+
+def service_type(service: str) -> str:
+    """"garage", "hvac", ... for a Service: line, or "" when it's unclear or mixed."""
+    matches = [name for name, pattern in _SERVICE_TYPE_RES.items() if pattern.search(service)]
+    return matches[0] if len(matches) == 1 else ""
+
+
+def find_sales(
+    messages: list[Message], minimum: float, keyword: str | None = None, service: str | None = "garage"
+) -> list[Sale]:
+    """Closed jobs over `minimum`. `service` keeps only that job type ("garage", "hvac"); None keeps all."""
     sales = []
     for msg in messages:
         if keyword and keyword.lower() not in msg.text.lower():
             continue
         if not is_closed_report(msg.text):
+            continue
+        if service and service_type(_labelled_value(msg.text, _SERVICE_RE)) != service:
             continue
         amount = _labelled_amount(msg.text, _JOB_TOTAL_RE)
         if amount is None or amount <= minimum:
@@ -381,6 +417,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("chat", type=Path, help="WhatsApp export (.txt or .zip)")
     parser.add_argument("--min", type=float, default=1000, help="only sales ABOVE this amount (default 1000)")
     parser.add_argument("--out", default="good_customers", help="output file name prefix (default good_customers)")
+    parser.add_argument(
+        "--service", default="garage", choices=[*SERVICE_TYPES, "all"],
+        help="which jobs to keep, by the Service: line (default garage; 'all' keeps every job)",
+    )
     parser.add_argument("--keyword", help='only messages containing this word, e.g. "closing" or "report"')
     parser.add_argument("--sender", help="only messages from senders whose name contains this text")
     parser.add_argument("--since", help="only messages on/after this date, same format as the export (e.g. 1/1/24)")
@@ -398,7 +438,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.since:
         messages = messages[_first_index_on_or_after(messages, args.since):]
 
-    sales = find_sales(messages, args.min, args.keyword)
+    service = None if args.service == "all" else args.service
+    sales = find_sales(messages, args.min, args.keyword, service)
     customers = group_customers(sales)
 
     out = Path(args.out)
@@ -409,6 +450,12 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Scanned {len(messages)} messages.")
     open_jobs = sum(1 for m in messages if is_customer_report(m.text) and not is_closed_report(m.text))
     print(f"Skipped {open_jobs} reports without a Closed + Total: line (callbacks, in progress, ...).")
+    if service:
+        other = sum(
+            1 for m in messages
+            if is_closed_report(m.text) and service_type(_labelled_value(m.text, _SERVICE_RE)) != service
+        )
+        print(f"Skipped {other} closed jobs that are not {service} jobs (by the Service: line).")
     print(f"Found {len(sales)} sales above ${args.min:,.0f} from {len(customers)} customers.")
     for c in customers[:10]:
         print(f"  {c.customer:<30} {c.phone:<18} ${c.total_spent:>10,.2f}  ({c.jobs} job{'s' if c.jobs != 1 else ''})")

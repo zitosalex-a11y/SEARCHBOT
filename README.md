@@ -1,6 +1,6 @@
 # SearchBot: find your big customers in a WhatsApp group
 
-SearchBot reads a WhatsApp chat **export file** and finds every closing report with a sale above $1000 (you can change the amount). It then writes a list of those customers to a spreadsheet.
+SearchBot reads a WhatsApp chat **export file** and finds every closed **garage door** job with a total above $1000 (you can change the amount). It then writes a list of those customers to a spreadsheet.
 
 It never connects to WhatsApp, so your account can't be banned for using it.
 
@@ -21,6 +21,7 @@ Options:
 
 | Option | Meaning |
 |---|---|
+| `--service hvac` | only HVAC jobs (default: `garage`; use `all` for every job) |
 | `--min 1500` | only sales above $1500 (default: 1000) |
 | `--out big_customers` | name for the output files |
 | `--keyword closing` | only read messages that contain the word "closing" |
@@ -55,6 +56,14 @@ Parts: 150$          (or "CP parts: 150$" / "Company parts: 220$", can be on sev
 **Only finished jobs are counted.** A message is included only if it has all three of these:
 a `Customer:` line, a line that starts with `Closed` (for example `Closed`, `CLOSED ✅` or `Closed - paid cash`), and a `Total:` line.
 Callbacks, in-progress jobs and ordinary chat messages are skipped. The bot prints how many reports it skipped.
+
+**Only garage door jobs are counted.** The bot uses the `Service:` line to decide what kind of job it is:
+- **Garage door:** the line mentions garage, door, spring, opener, torsion, cable, roller, track or panel.
+- **HVAC:** the line mentions HVAC, AC, A/C, furnace, heat, heater, duct, cooling, thermostat, compressor and similar words. These jobs are skipped.
+
+A job is also skipped if its `Service:` line is missing, doesn't match either list, or mentions both kinds of work.
+Use `--service hvac` to get only HVAC jobs, or `--service all` to get every closed job.
+To teach the bot new words, add them to `SERVICE_TYPES` at the top of `searchbot.py`.
 
 The job total is always read from the `Total:` line. A report is included only if its total is **over** the limit, so a total of exactly $1000 is left out.
 Parts cost is the sum of all parts lines. The original lines are kept in the `parts_detail` column, so you can still see which parts were CP and which were company parts.

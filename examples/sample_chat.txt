@@ -2,9 +2,9 @@
 3/1/24, 9:15 AM - Mike (Tech): Customer: John Smith
 Phone: (555) 123-4567
 Address: 12 Oak St, Dallas TX 75201
-Service: AC not cooling
+Service: Garage door repair
 Preferred Date And Time: 3/1 10am-12pm
-Notes: 2 story house, unit in attic
+Notes: double door, both springs + new opener
 
 Closed
 Total: 4,850$
@@ -36,7 +36,7 @@ Company parts: 220$
 3/3/24, 10:10 AM - Sam: Customer: John Smith
 Phone: 555.123.4567
 Address: 12 Oak St, Dallas TX 75201
-Service: Duct cleaning
+Service: Garage door opener install
 Preferred Date And Time: 3/3 9am
 Notes:
 
@@ -74,3 +74,13 @@ Notes: day 1 of 2
 In progress
 Total: 7,500$
 Deposit: 2,000$
+3/7/24, 11:00 AM - Sam: Customer: Paul Adams
+Phone: 555-616-7070
+Address: 70 Maple St, Dallas TX
+Service: HVAC - AC not cooling
+Preferred Date And Time: 3/7 10am
+Notes: replaced compressor
+
+Closed
+Total: 3,900$
+Parts: 1,400$

@@ -38,7 +38,7 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(searchbot.extract_amount(text), 1900)
 
     def test_hebrew_report(self):
-        text = "לקוח: דני כהן\nטלפון: 050-1234567\nנסגר\nסה\"כ: 1500 ש\"ח"
+        text = "לקוח: דני כהן\nטלפון: 050-1234567\nשירות: תיקון דלת מוסך\nנסגר\nסה\"כ: 1500 ש\"ח"
         [sale] = searchbot.find_sales(searchbot.parse_messages("1.3.24, 10:00 - רון: " + text), 1000)
         self.assertEqual(sale.customer, "דני כהן")
         self.assertEqual(sale.phone, "050-1234567")
@@ -86,6 +86,26 @@ class ClosingReportTests(unittest.TestCase):
         text = self.REPORT.replace("Closed\n", "CLOSED ✅ paid cash\n")
         self.assertEqual(len(searchbot.find_sales(searchbot.parse_messages(text), 1000)), 1)
 
+    def test_only_garage_door_jobs_by_default(self):
+        hvac = self.REPORT.replace("Service: Garage door spring", "Service: HVAC - AC not cooling")
+        no_service = self.REPORT.replace("Service: Garage door spring\n", "")
+        for text in (hvac, no_service):
+            with self.subTest(service=text.splitlines()[3]):
+                self.assertEqual(searchbot.find_sales(searchbot.parse_messages(text), 1000), [])
+        # --service all / hvac
+        self.assertEqual(len(searchbot.find_sales(searchbot.parse_messages(hvac), 1000, service=None)), 1)
+        self.assertEqual(len(searchbot.find_sales(searchbot.parse_messages(hvac), 1000, service="hvac")), 1)
+
+    def test_service_type(self):
+        cases = {
+            "Garage door repair": "garage", "Broken spring": "garage", "Opener install": "garage",
+            "HVAC": "hvac", "AC not cooling": "hvac", "A/C repair": "hvac", "Furnace": "hvac",
+            "Dryer vent cleaning": "", "": "",
+        }
+        for service, expected in cases.items():
+            with self.subTest(service=service):
+                self.assertEqual(searchbot.service_type(service), expected)
+
     def test_total_without_currency_sign(self):
         text = "Customer: A\nClosed\nTotal: 2500\nParts: 300"
         self.assertEqual(searchbot.extract_amount(text), 2500)
@@ -106,7 +126,7 @@ class EndToEndTests(unittest.TestCase):
             with open(f"{out}_sales.csv", encoding="utf-8-sig") as f:
                 sales = list(csv.DictReader(f))
 
-        # $350 job, exactly-$1000 job, callback, in-progress job and chat messages are excluded
+        # HVAC jobs, $350 job, exactly-$1000 job, callback, in-progress job and chat are excluded
         self.assertEqual(len(sales), 3)
         self.assertEqual([c["customer"] for c in customers], ["John Smith", "Robert Lee"])
         john = customers[0]
