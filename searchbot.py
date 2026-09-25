@@ -1,0 +1,346 @@
+#!/usr/bin/env python3
+"""SearchBot - pull big sales out of a WhatsApp group chat export.
+
+Reads the file WhatsApp produces with "Export chat" (a .txt, or the .zip it
+sometimes comes in), finds every closing report whose sale amount is above a
+threshold (default $1000), and writes:
+
+  * <out>_sales.csv      - one row per qualifying job
+  * <out>_customers.csv  - one row per customer (totals, job count, contact info)
+  * <out>.xlsx           - both sheets in one workbook (only if openpyxl is installed)
+
+Usage:
+  python searchbot.py "WhatsApp Chat with Closing Reports.txt"
+  python searchbot.py chat.zip --min 1500 --out big_customers
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import io
+import re
+import sys
+import zipfile
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+
+# --------------------------------------------------------------------------
+# Chat parsing
+# --------------------------------------------------------------------------
+
+# Invisible direction marks WhatsApp sprinkles into exports.
+_INVISIBLE = dict.fromkeys(map(ord, "‎‏‪‫‬‭‮﻿"), None)
+
+# Android: "12/31/23, 9:15 PM - John: text"   iOS: "[12/31/23, 9:15:04 PM] John: text"
+_MESSAGE_START = re.compile(
+    r"^\[?(?P<date>\d{1,4}[./-]\d{1,2}[./-]\d{1,4}),?\s+"
+    r"(?P<time>\d{1,2}[:.]\d{2}(?:[:.]\d{2})?(?:\s?[APap]\.?\s?[Mm]\.?)?)\]?"
+    r"\s*(?:-\s*)?(?P<sender>[^:]{1,80}?):\s(?P<text>.*)$"
+)
+
+
+@dataclass
+class Message:
+    date: str
+    time: str
+    sender: str
+    text: str
+
+
+def read_chat(path: Path) -> str:
+    """Return the chat text from a .txt export or a .zip export."""
+    if path.suffix.lower() == ".zip":
+        with zipfile.ZipFile(path) as zf:
+            txt_names = [n for n in zf.namelist() if n.lower().endswith(".txt")]
+            if not txt_names:
+                raise SystemExit(f"No .txt chat file found inside {path}")
+            raw = zf.read(txt_names[0])
+    else:
+        raw = path.read_bytes()
+    return raw.decode("utf-8-sig", errors="replace")
+
+
+def parse_messages(chat_text: str) -> list[Message]:
+    """Split an export into messages, joining multi-line messages together."""
+    messages: list[Message] = []
+    for line in chat_text.splitlines():
+        line = line.translate(_INVISIBLE)
+        match = _MESSAGE_START.match(line)
+        if match:
+            messages.append(Message(match["date"], match["time"], match["sender"].strip(), match["text"]))
+        elif messages:
+            messages[-1].text += "\n" + line
+    return messages
+
+
+# --------------------------------------------------------------------------
+# Report field extraction
+# --------------------------------------------------------------------------
+
+# Words that label the sale amount in a closing report (English + Hebrew).
+TOTAL_LABELS = [
+    "total", "grand total", "sale", "sold", "amount", "price", "paid", "payment",
+    "charged", "collected", "invoice", "job total", "ticket",
+    'סה"כ', "סהכ", "סכום", "מחיר", "שולם", "תשלום", "עלות",
+]
+CUSTOMER_LABELS = ["customer", "client", "name", "customer name", "client name", "לקוח", "שם", "שם לקוח"]
+PHONE_LABELS = ["phone", "tel", "cell", "mobile", "number", "טלפון", "נייד", "פלאפון"]
+ADDRESS_LABELS = ["address", "addr", "location", "כתובת", "עיר"]
+
+_NUMBER = r"\d{1,3}(?:[,\s]\d{3})+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?"
+_CURRENCY_BEFORE = r"(?:\$|usd|us\$|₪|ils|nis)"
+_CURRENCY_AFTER = r"(?:\$|usd|dollars?|bucks|₪|ils|nis|ש\"ח|שח|דולר)"
+_AMOUNT_WITH_CURRENCY = re.compile(
+    rf"{_CURRENCY_BEFORE}\s?(?P<a>{_NUMBER})(?P<ka>k\b)?"
+    rf"|(?P<b>{_NUMBER})(?P<kb>k\b)?\s?{_CURRENCY_AFTER}",
+    re.IGNORECASE,
+)
+_ANY_NUMBER = re.compile(rf"(?P<n>{_NUMBER})(?P<k>k\b)?", re.IGNORECASE)
+_PHONE = re.compile(r"(?:\+|\()?\d[\d\s().-]{7,}\d")
+
+
+def _to_float(number: str, thousands: str | None) -> float:
+    value = float(re.sub(r"[,\s]", "", number))
+    return value * 1000 if thousands else value
+
+
+def _label_regex(labels: list[str]) -> re.Pattern:
+    alternatives = "|".join(sorted((re.escape(l) for l in labels), key=len, reverse=True))
+    # Label at line start (optionally after bullets/emoji), then ":" "-" "=" or whitespace.
+    return re.compile(rf"^[\W_]*(?:{alternatives})\b\s*[:=\-–]?\s*(?P<value>.*)$", re.IGNORECASE)
+
+
+_TOTAL_RE = _label_regex(TOTAL_LABELS)
+_CUSTOMER_RE = _label_regex(CUSTOMER_LABELS)
+_PHONE_RE = _label_regex(PHONE_LABELS)
+_ADDRESS_RE = _label_regex(ADDRESS_LABELS)
+_CUSTOMER_INLINE_RE = re.compile(
+    r"\b(?:%s)\s*:\s*(?P<value>[^,;|\n]+)"
+    % "|".join(sorted((re.escape(l) for l in CUSTOMER_LABELS), key=len, reverse=True)),
+    re.IGNORECASE,
+)
+
+
+def extract_amount(text: str) -> float | None:
+    """Find the sale amount of a report.
+
+    Priority: a number on a "Total:/Sale:/Paid:" line, then the largest amount
+    written with a currency sign ($1,200 / 1200$ / 1.2k USD). Plain numbers with
+    no label and no currency are ignored so phone numbers and dates don't count.
+    """
+    labelled: list[float] = []
+    for line in text.splitlines():
+        m = _TOTAL_RE.match(line.strip())
+        if not m:
+            continue
+        cur = _AMOUNT_WITH_CURRENCY.search(m["value"])
+        if cur:
+            labelled.append(_to_float(cur["a"] or cur["b"], cur["ka"] or cur["kb"]))
+            continue
+        num = _ANY_NUMBER.search(m["value"])
+        if num:
+            labelled.append(_to_float(num["n"], num["k"]))
+    if labelled:
+        return max(labelled)
+
+    with_currency = [
+        _to_float(m["a"] or m["b"], m["ka"] or m["kb"]) for m in _AMOUNT_WITH_CURRENCY.finditer(text)
+    ]
+    return max(with_currency) if with_currency else None
+
+
+def _labelled_value(text: str, pattern: re.Pattern) -> str:
+    for line in text.splitlines():
+        m = pattern.match(line.strip())
+        if m and m["value"].strip():
+            return m["value"].strip()
+    return ""
+
+
+def extract_phone(text: str) -> str:
+    labelled = _labelled_value(text, _PHONE_RE)
+    source = labelled or text
+    m = _PHONE.search(source)
+    return re.sub(r"\s+", " ", m.group(0)).strip() if m else ""
+
+
+def extract_customer(text: str) -> str:
+    name = _labelled_value(text, _CUSTOMER_RE)
+    if not name:
+        # One-line reports: "Closing - Name: Robert Lee, 555 222 3333, paid 1200$"
+        m = _CUSTOMER_INLINE_RE.search(text)
+        name = m["value"].strip() if m else ""
+    # Drop a trailing phone number if the name line has one ("John Smith 050-1234567").
+    return _PHONE.sub("", name).strip(" ,-|") if name else ""
+
+
+# --------------------------------------------------------------------------
+# Sales / customers
+# --------------------------------------------------------------------------
+
+@dataclass
+class Sale:
+    date: str
+    time: str
+    sent_by: str
+    customer: str
+    phone: str
+    address: str
+    amount: float
+    report: str
+
+
+@dataclass
+class Customer:
+    customer: str
+    phone: str = ""
+    address: str = ""
+    jobs: int = 0
+    total_spent: float = 0.0
+    biggest_sale: float = 0.0
+    last_job_date: str = ""
+    dates: list[str] = field(default_factory=list)
+
+
+def find_sales(messages: list[Message], minimum: float, keyword: str | None = None) -> list[Sale]:
+    sales = []
+    for msg in messages:
+        if keyword and keyword.lower() not in msg.text.lower():
+            continue
+        amount = extract_amount(msg.text)
+        if amount is None or amount <= minimum:
+            continue
+        sales.append(Sale(
+            date=msg.date,
+            time=msg.time,
+            sent_by=msg.sender,
+            customer=extract_customer(msg.text),
+            phone=extract_phone(msg.text),
+            address=_labelled_value(msg.text, _ADDRESS_RE),
+            amount=amount,
+            report=msg.text.strip(),
+        ))
+    return sales
+
+
+def group_customers(sales: list[Sale]) -> list[Customer]:
+    """Merge sales that belong to the same customer (same phone, else same name)."""
+    customers: dict[str, Customer] = {}
+    for sale in sales:
+        digits = re.sub(r"\D", "", sale.phone)
+        key = digits[-9:] if digits else sale.customer.lower().strip() or f"unknown-{id(sale)}"
+        c = customers.setdefault(key, Customer(customer=sale.customer or "(no name in report)"))
+        if not c.phone and sale.phone:
+            c.phone = sale.phone
+        if not c.address and sale.address:
+            c.address = sale.address
+        if c.customer == "(no name in report)" and sale.customer:
+            c.customer = sale.customer
+        c.jobs += 1
+        c.total_spent += sale.amount
+        c.biggest_sale = max(c.biggest_sale, sale.amount)
+        c.dates.append(sale.date)
+        c.last_job_date = sale.date
+    return sorted(customers.values(), key=lambda c: c.total_spent, reverse=True)
+
+
+# --------------------------------------------------------------------------
+# Output
+# --------------------------------------------------------------------------
+
+SALE_COLUMNS = ["date", "time", "sent_by", "customer", "phone", "address", "amount", "report"]
+CUSTOMER_COLUMNS = ["customer", "phone", "address", "jobs", "total_spent", "biggest_sale", "last_job_date"]
+
+
+def _rows(items, columns):
+    return [[getattr(item, col) for col in columns] for item in items]
+
+
+def write_csv(path: Path, columns: list[str], rows: list[list]) -> None:
+    # utf-8-sig so Excel opens Hebrew / emoji correctly.
+    with path.open("w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.writer(f)
+        writer.writerow(columns)
+        writer.writerows(rows)
+
+
+def write_xlsx(path: Path, sales: list[Sale], customers: list[Customer]) -> bool:
+    try:
+        from openpyxl import Workbook
+    except ImportError:
+        return False
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Customers"
+    ws.append(CUSTOMER_COLUMNS)
+    for row in _rows(customers, CUSTOMER_COLUMNS):
+        ws.append(row)
+    ws2 = wb.create_sheet("Sales")
+    ws2.append(SALE_COLUMNS)
+    for row in _rows(sales, SALE_COLUMNS):
+        ws2.append(row)
+    wb.save(path)
+    return True
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Find sales above a threshold in a WhatsApp chat export.")
+    parser.add_argument("chat", type=Path, help="WhatsApp export (.txt or .zip)")
+    parser.add_argument("--min", type=float, default=1000, help="only sales ABOVE this amount (default 1000)")
+    parser.add_argument("--out", default="good_customers", help="output file name prefix (default good_customers)")
+    parser.add_argument("--keyword", help='only messages containing this word, e.g. "closing" or "report"')
+    parser.add_argument("--sender", help="only messages from senders whose name contains this text")
+    parser.add_argument("--since", help="only messages on/after this date, same format as the export (e.g. 1/1/24)")
+    args = parser.parse_args(argv)
+
+    if not args.chat.exists():
+        parser.error(f"file not found: {args.chat}")
+
+    messages = parse_messages(read_chat(args.chat))
+    if not messages:
+        print("No messages found - is this a WhatsApp 'Export chat' file?", file=sys.stderr)
+        return 1
+    if args.sender:
+        messages = [m for m in messages if args.sender.lower() in m.sender.lower()]
+    if args.since:
+        messages = messages[_first_index_on_or_after(messages, args.since):]
+
+    sales = find_sales(messages, args.min, args.keyword)
+    customers = group_customers(sales)
+
+    out = Path(args.out)
+    write_csv(out.with_name(out.name + "_sales.csv"), SALE_COLUMNS, _rows(sales, SALE_COLUMNS))
+    write_csv(out.with_name(out.name + "_customers.csv"), CUSTOMER_COLUMNS, _rows(customers, CUSTOMER_COLUMNS))
+    wrote_xlsx = write_xlsx(out.with_name(out.name + ".xlsx"), sales, customers)
+
+    print(f"Scanned {len(messages)} messages.")
+    print(f"Found {len(sales)} sales above ${args.min:,.0f} from {len(customers)} customers.")
+    for c in customers[:10]:
+        print(f"  {c.customer:<30} {c.phone:<18} ${c.total_spent:>10,.2f}  ({c.jobs} job{'s' if c.jobs != 1 else ''})")
+    print(f"\nSaved: {out.name}_customers.csv, {out.name}_sales.csv" + (f", {out.name}.xlsx" if wrote_xlsx else ""))
+    return 0
+
+
+def _first_index_on_or_after(messages: list[Message], since: str) -> int:
+    """Index of the first message on/after `since` (the export is chronological)."""
+    for fmt in ("%m/%d/%y", "%m/%d/%Y", "%d/%m/%y", "%d/%m/%Y", "%d.%m.%y", "%d.%m.%Y", "%Y-%m-%d"):
+        try:
+            target = datetime.strptime(since, fmt)
+            break
+        except ValueError:
+            continue
+    else:
+        raise SystemExit(f"Could not understand --since date: {since}")
+    for i, msg in enumerate(messages):
+        try:
+            if datetime.strptime(msg.date, fmt) >= target:
+                return i
+        except ValueError:
+            continue
+    return len(messages)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,19 @@
+3/1/24, 8:02 AM - Messages and calls are end-to-end encrypted. No one outside of this chat, not even WhatsApp, can read or listen to them.
+3/1/24, 9:15 AM - Mike (Tech): Closing report
+Customer: John Smith
+Phone: (555) 123-4567
+Address: 12 Oak St, Dallas TX
+Job: AC replacement
+Total: $4,850
+3/1/24, 9:20 AM - Dana: great job mike!!
+3/1/24, 11:40 AM - Sam: Closing report
+Customer: Lisa Wong
+Phone: 555-987-6543
+Total: $350
+3/2/24, 2:05 PM - Mike (Tech): Closing - Name: Robert Lee, 555 222 3333, paid 1200$ cash
+3/3/24, 10:10 AM - Sam: Closing report
+Customer: John Smith
+Phone: 555.123.4567
+Service call + duct cleaning
+Total: 1,500.00 USD
+3/4/24, 4:45 PM - Dana: reminder: meeting tomorrow at 1000 main st
