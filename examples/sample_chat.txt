@@ -1,19 +1,56 @@
 3/1/24, 8:02 AM - Messages and calls are end-to-end encrypted. No one outside of this chat, not even WhatsApp, can read or listen to them.
-3/1/24, 9:15 AM - Mike (Tech): Closing report
-Customer: John Smith
+3/1/24, 9:15 AM - Mike (Tech): Customer: John Smith
 Phone: (555) 123-4567
-Address: 12 Oak St, Dallas TX
-Job: AC replacement
-Total: $4,850
+Address: 12 Oak St, Dallas TX 75201
+Service: AC not cooling
+Preferred Date And Time: 3/1 10am-12pm
+Notes: 2 story house, unit in attic
+
+Closed
+Total: 4,850$
+Parts: 1,200$
 3/1/24, 9:20 AM - Dana: great job mike!!
-3/1/24, 11:40 AM - Sam: Closing report
-Customer: Lisa Wong
+3/1/24, 11:40 AM - Sam: Customer: Lisa Wong
 Phone: 555-987-6543
-Total: $350
-3/2/24, 2:05 PM - Mike (Tech): Closing - Name: Robert Lee, 555 222 3333, paid 1200$ cash
-3/3/24, 10:10 AM - Sam: Closing report
-Customer: John Smith
+Address: 88 Pine Ave, Plano TX
+Service: Dryer vent cleaning
+Preferred Date And Time: 3/1 1-3pm
+Notes:
+
+Closed
+Total: 350$
+Parts: 0
+3/2/24, 2:05 PM - Mike (Tech): Customer: Robert Lee
+Phone: 555 222 3333
+Address: 400 Elm Rd, Frisco TX
+Service: Garage door spring
+Preferred Date And Time: 3/2 2pm
+Notes: customer will wait for parts 2 weeks
+
+Closed
+Deposit: 500$
+Balance: 1,300$
+Total: 1,800$
+CP parts: 150$
+Company parts: 220$
+3/3/24, 10:10 AM - Sam: Customer: John Smith
 Phone: 555.123.4567
-Service call + duct cleaning
-Total: 1,500.00 USD
+Address: 12 Oak St, Dallas TX 75201
+Service: Duct cleaning
+Preferred Date And Time: 3/3 9am
+Notes:
+
+Closed
+Total: $1,500
+Parts: $80
 3/4/24, 4:45 PM - Dana: reminder: meeting tomorrow at 1000 main st
+3/5/24, 9:00 AM - Sam: Customer: Maria Garcia
+Phone: 555-444-1212
+Address: 9 Lake Dr, Irving TX
+Service: Water heater
+Preferred Date And Time: 3/5 8-10am
+Notes:
+
+Closed
+Total: 1000$
+Parts: 400$

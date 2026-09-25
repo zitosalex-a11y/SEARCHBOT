@@ -113,6 +113,12 @@ def _label_regex(labels: list[str]) -> re.Pattern:
 
 
 _TOTAL_RE = _label_regex(TOTAL_LABELS)
+_JOB_TOTAL_RE = _label_regex(["total", "grand total", "job total", 'סה"כ', "סהכ"])
+_DEPOSIT_RE = _label_regex(["deposit", "dep", "מקדמה"])
+_BALANCE_RE = _label_regex(["balance", "balance due", "remaining", "יתרה"])
+_SERVICE_RE = _label_regex(["service", "שירות"])
+# Any line whose label mentions parts: "Parts:", "CP parts:", "cp/company parts:", "Total parts:".
+_PARTS_RE = re.compile(r"^[\W_]*(?P<label>[^:\n]{0,30}?\b(?:parts?|חלקים)\b[^:\n\d]{0,20}?)\s*[:=]\s*(?P<value>.*)$", re.IGNORECASE)
 _CUSTOMER_RE = _label_regex(CUSTOMER_LABELS)
 _PHONE_RE = _label_regex(PHONE_LABELS)
 _ADDRESS_RE = _label_regex(ADDRESS_LABELS)
@@ -123,25 +129,49 @@ _CUSTOMER_INLINE_RE = re.compile(
 )
 
 
+def _amount_in(value: str) -> float | None:
+    """First amount in a label's value: prefer one with a currency sign, else any number."""
+    cur = _AMOUNT_WITH_CURRENCY.search(value)
+    if cur:
+        return _to_float(cur["a"] or cur["b"], cur["ka"] or cur["kb"])
+    num = _ANY_NUMBER.search(value)
+    return _to_float(num["n"], num["k"]) if num else None
+
+
+def _labelled_amount(text: str, pattern: re.Pattern) -> float | None:
+    """Amount on the first line with this label (or on the next line, if the label line is empty)."""
+    lines = [l.strip() for l in text.splitlines()]
+    for i, line in enumerate(lines):
+        if _PARTS_RE.match(line):  # "Total parts: 300" is parts, not the job total
+            continue
+        m = pattern.match(line)
+        if not m:
+            continue
+        value = m["value"] or next((l for l in lines[i + 1:] if l), "")
+        amount = _amount_in(value)
+        if amount is not None:
+            return amount
+    return None
+
+
 def extract_amount(text: str) -> float | None:
     """Find the sale amount of a report.
 
-    Priority: a number on a "Total:/Sale:/Paid:" line, then the largest amount
-    written with a currency sign ($1,200 / 1200$ / 1.2k USD). Plain numbers with
-    no label and no currency are ignored so phone numbers and dates don't count.
+    Priority: the "Total:" line; then a number on another sale line ("Sale:/Paid:/
+    Price:"); then the largest amount written with a currency sign ($1,200 / 1200$).
+    Plain numbers with no label and no currency are ignored so phone numbers and
+    dates don't count.
     """
-    labelled: list[float] = []
-    for line in text.splitlines():
-        m = _TOTAL_RE.match(line.strip())
-        if not m:
-            continue
-        cur = _AMOUNT_WITH_CURRENCY.search(m["value"])
-        if cur:
-            labelled.append(_to_float(cur["a"] or cur["b"], cur["ka"] or cur["kb"]))
-            continue
-        num = _ANY_NUMBER.search(m["value"])
-        if num:
-            labelled.append(_to_float(num["n"], num["k"]))
+    total = _labelled_amount(text, _JOB_TOTAL_RE)
+    if total is not None:
+        return total
+
+    labelled = [
+        a for line in text.splitlines()
+        if not _PARTS_RE.match(line.strip()) and not _DEPOSIT_RE.match(line.strip())
+        and not _BALANCE_RE.match(line.strip())
+        and (m := _TOTAL_RE.match(line.strip())) and (a := _amount_in(m["value"])) is not None
+    ]
     if labelled:
         return max(labelled)
 
@@ -149,6 +179,26 @@ def extract_amount(text: str) -> float | None:
         _to_float(m["a"] or m["b"], m["ka"] or m["kb"]) for m in _AMOUNT_WITH_CURRENCY.finditer(text)
     ]
     return max(with_currency) if with_currency else None
+
+
+def extract_parts(text: str) -> tuple[float | None, str]:
+    """Parts cost and the raw parts lines.
+
+    Handles "Parts: 250", "CP parts: $120", "Company parts: 300", and several
+    parts lines in one report (they are added up).
+    """
+    amounts: list[float] = []
+    details: list[str] = []
+    for line in text.splitlines():
+        m = _PARTS_RE.match(line.strip())
+        if not m:
+            continue
+        details.append(line.strip())
+        in_line = [_to_float(c["a"] or c["b"], c["ka"] or c["kb"]) for c in _AMOUNT_WITH_CURRENCY.finditer(m["value"])]
+        if not in_line:
+            in_line = [_to_float(n["n"], n["k"]) for n in _ANY_NUMBER.finditer(m["value"])]
+        amounts.extend(in_line)
+    return (sum(amounts) if amounts else None), " | ".join(details)
 
 
 def _labelled_value(text: str, pattern: re.Pattern) -> str:
@@ -188,7 +238,12 @@ class Sale:
     customer: str
     phone: str
     address: str
-    amount: float
+    service: str
+    total: float
+    parts: float | None
+    parts_detail: str
+    deposit: float | None
+    balance: float | None
     report: str
 
 
@@ -199,6 +254,7 @@ class Customer:
     address: str = ""
     jobs: int = 0
     total_spent: float = 0.0
+    total_parts: float = 0.0
     biggest_sale: float = 0.0
     last_job_date: str = ""
     dates: list[str] = field(default_factory=list)
@@ -212,6 +268,7 @@ def find_sales(messages: list[Message], minimum: float, keyword: str | None = No
         amount = extract_amount(msg.text)
         if amount is None or amount <= minimum:
             continue
+        parts, parts_detail = extract_parts(msg.text)
         sales.append(Sale(
             date=msg.date,
             time=msg.time,
@@ -219,7 +276,12 @@ def find_sales(messages: list[Message], minimum: float, keyword: str | None = No
             customer=extract_customer(msg.text),
             phone=extract_phone(msg.text),
             address=_labelled_value(msg.text, _ADDRESS_RE),
-            amount=amount,
+            service=_labelled_value(msg.text, _SERVICE_RE),
+            total=amount,
+            parts=parts,
+            parts_detail=parts_detail,
+            deposit=_labelled_amount(msg.text, _DEPOSIT_RE),
+            balance=_labelled_amount(msg.text, _BALANCE_RE),
             report=msg.text.strip(),
         ))
     return sales
@@ -239,8 +301,9 @@ def group_customers(sales: list[Sale]) -> list[Customer]:
         if c.customer == "(no name in report)" and sale.customer:
             c.customer = sale.customer
         c.jobs += 1
-        c.total_spent += sale.amount
-        c.biggest_sale = max(c.biggest_sale, sale.amount)
+        c.total_spent += sale.total
+        c.total_parts += sale.parts or 0
+        c.biggest_sale = max(c.biggest_sale, sale.total)
         c.dates.append(sale.date)
         c.last_job_date = sale.date
     return sorted(customers.values(), key=lambda c: c.total_spent, reverse=True)
@@ -250,8 +313,13 @@ def group_customers(sales: list[Sale]) -> list[Customer]:
 # Output
 # --------------------------------------------------------------------------
 
-SALE_COLUMNS = ["date", "time", "sent_by", "customer", "phone", "address", "amount", "report"]
-CUSTOMER_COLUMNS = ["customer", "phone", "address", "jobs", "total_spent", "biggest_sale", "last_job_date"]
+SALE_COLUMNS = [
+    "date", "customer", "phone", "address", "service", "total", "parts", "parts_detail",
+    "deposit", "balance", "sent_by", "time", "report",
+]
+CUSTOMER_COLUMNS = [
+    "customer", "phone", "address", "jobs", "total_spent", "total_parts", "biggest_sale", "last_job_date",
+]
 
 
 def _rows(items, columns):

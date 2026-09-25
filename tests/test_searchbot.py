@@ -42,7 +42,46 @@ class ParseTests(unittest.TestCase):
         [sale] = searchbot.find_sales(searchbot.parse_messages("1.3.24, 10:00 - רון: " + text), 1000)
         self.assertEqual(sale.customer, "דני כהן")
         self.assertEqual(sale.phone, "050-1234567")
-        self.assertEqual(sale.amount, 1500)
+        self.assertEqual(sale.total, 1500)
+
+
+class ClosingReportTests(unittest.TestCase):
+    REPORT = (
+        "3/2/24, 2:05 PM - Mike: Customer: Robert Lee\n"
+        "Phone: 555 222 3333\n"
+        "Address: 400 Elm Rd, Frisco TX\n"
+        "Service: Garage door spring\n"
+        "Preferred Date And Time: 3/2 2pm-4pm\n"
+        "Notes: waiting for parts 2 weeks, gate code 4455\n"
+        "\n"
+        "Closed\n"
+        "Deposit: 500$\n"
+        "Balance: 1,300$\n"
+        "Total: 1,800$\n"
+        "CP parts: 150$\n"
+        "Company parts: 220$\n"
+    )
+
+    def test_team_report_format(self):
+        [sale] = searchbot.find_sales(searchbot.parse_messages(self.REPORT), 1000)
+        self.assertEqual(sale.customer, "Robert Lee")
+        self.assertEqual(sale.phone, "555 222 3333")
+        self.assertEqual(sale.address, "400 Elm Rd, Frisco TX")
+        self.assertEqual(sale.service, "Garage door spring")
+        self.assertEqual(sale.total, 1800)  # the Total line, not the bigger-looking numbers
+        self.assertEqual(sale.deposit, 500)
+        self.assertEqual(sale.balance, 1300)
+        self.assertEqual(sale.parts, 370)  # CP + company parts
+        self.assertEqual(sale.parts_detail, "CP parts: 150$ | Company parts: 220$")
+
+    def test_total_without_currency_sign(self):
+        text = "Customer: A\nClosed\nTotal: 2500\nParts: 300"
+        self.assertEqual(searchbot.extract_amount(text), 2500)
+        self.assertEqual(searchbot.extract_parts(text)[0], 300)
+
+    def test_exactly_1000_is_not_over(self):
+        msgs = searchbot.parse_messages("3/5/24, 9:00 AM - Sam: Customer: A\nTotal: 1000$")
+        self.assertEqual(searchbot.find_sales(msgs, 1000), [])
 
 
 class EndToEndTests(unittest.TestCase):
@@ -55,11 +94,13 @@ class EndToEndTests(unittest.TestCase):
             with open(f"{out}_sales.csv", encoding="utf-8-sig") as f:
                 sales = list(csv.DictReader(f))
 
-        self.assertEqual(len(sales), 3)  # $350 job and the "1000 main st" chat are excluded
+        # $350 job, exactly-$1000 job and the "1000 main st" chat are excluded
+        self.assertEqual(len(sales), 3)
         self.assertEqual([c["customer"] for c in customers], ["John Smith", "Robert Lee"])
         john = customers[0]
         self.assertEqual(john["jobs"], "2")  # merged by phone despite different formatting
         self.assertEqual(float(john["total_spent"]), 6350)
+        self.assertEqual(float(john["total_parts"]), 1280)
 
 
 if __name__ == "__main__":
